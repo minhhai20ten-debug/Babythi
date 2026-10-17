@@ -8,9 +8,9 @@
   "windowsImage": "windows-2022",
   "osBuild": "20348",
   "driveLetter": "X",
-  "tailscaleIp": "100.88.155.84",
+  "tailscaleIp": "100.65.185.48",
   "durationMinutes": 300,
-  "startUtc": "2026-10-17T10:48:35.0076149Z",
-  "runId": "39026053211",
-  "lastUpdatedUtc": "2026-10-17T15:44:56.9246389Z"
+  "startUtc": "2026-10-17T15:51:20.0593405Z",
+  "runId": "39046536171",
+  "lastUpdatedUtc": "2026-10-17T20:47:04.0235513Z"
 }
