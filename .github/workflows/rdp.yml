@@ -1507,7 +1507,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Continue';
           $user          = "$env:RDP_USER";
-          $installerPath = 'C:\Users\runneradmin\Downloads\StarDesk_1.5.2.exe';
+          $installerPath = 'C:\Users\runneradmin\Downloads\StarDesk_1.5.3.exe';
           $appDir        = 'C:\Program Files\StarDesk';
           $appExe        = 'C:\Program Files\StarDesk\StarDesk.exe';
 
