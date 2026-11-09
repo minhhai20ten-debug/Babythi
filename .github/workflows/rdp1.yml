@@ -1977,4 +1977,4 @@ jobs:
           if (($LASTEXITCODE) -ne 0) {
               throw 'Không kích hoạt được phiên mới';
           }
-          Write-Host "✅ Đã kích hoạt phiên tiếp theo cho máy [$env:MACHINE_ID]" -ForegroundColor Green;
+          Write-Host "✅ Đã kích hoạt phiên tiếp theo cho máy [$env:MACHINE_ID]" -ForegroundColor Green
