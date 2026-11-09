@@ -1599,15 +1599,16 @@ jobs:
           };
 
           # ── 4. Script health-check: kiểm tra MainWindowTitle + Responding (chống báo TREO oan)
-          $hcContent = @"
-`$proc = Get-Process StarDesk* -ErrorAction SilentlyContinue | Where-Object { `$_.MainWindowTitle -ne '' -and `$_.Responding } | Select-Object -First 1
-if (`$proc) { 'OK' | Out-File -FilePath '$hcOut' -Encoding ASCII -Force }
-else {
-    `$alive = Get-Process StarDesk* -ErrorAction SilentlyContinue | Where-Object { `$_.Responding } | Select-Object -First 1
-    if (`$alive) { 'SPLASH' | Out-File -FilePath '$hcOut' -Encoding ASCII -Force }
-    else { 'TREO' | Out-File -FilePath '$hcOut' -Encoding ASCII -Force }
-}
-"@;
+          $hcLines = @(
+              "`$proc = Get-Process StarDesk* -ErrorAction SilentlyContinue | Where-Object { `$_.MainWindowTitle -ne '' -and `$_.Responding } | Select-Object -First 1",
+              "if (`$proc) { 'OK' | Out-File -FilePath '$hcOut' -Encoding ASCII -Force }",
+              "else {",
+              "    `$alive = Get-Process StarDesk* -ErrorAction SilentlyContinue | Where-Object { `$_.Responding } | Select-Object -First 1",
+              "    if (`$alive) { 'SPLASH' | Out-File -FilePath '$hcOut' -Encoding ASCII -Force }",
+              "    else { 'TREO' | Out-File -FilePath '$hcOut' -Encoding ASCII -Force }",
+              "}"
+          );
+          $hcContent = $hcLines -join "`r`n";
           Set-Content -Path "$hcScript" -Value "$hcContent" -Encoding UTF8;
           & schtasks.exe /Create /TN "AISTV-SD-Health" /TR "pwsh.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$hcScript`"" /SC ONCE /ST 00:00 /RU "$user" /RL HIGHEST /IT /F *> $null;
 
