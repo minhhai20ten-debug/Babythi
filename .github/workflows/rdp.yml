@@ -1380,7 +1380,7 @@ jobs:
           exit 0;
 
       # ───────────────────────────────────────────────
-      # 9. KHỞI CHẠY WEB PANEL QUẢN LÝ & CÀI LẠI / MỞ STARDESK
+      # 9. KHỞI CHẠY WEB PANEL QUẢN LÝ
       # ───────────────────────────────────────────────
       - name: 🌐 Khởi chạy Web Quản Lý RDP & Sunshine (Port 8080) & Ghi State
         shell: pwsh
@@ -1500,86 +1500,192 @@ jobs:
           exit 0;
 
       # ───────────────────────────────────────────────
-      # 10. CÀI ĐẶT LẠI & MỞ STARDESK (SAU KHI HỆ THỐNG ĐÃ MỞ SẴN SÀNG)
+      # 10. CÀI ĐẶT LẠI & MỞ STARDESK (ĐÃ FIX TRIỆT ĐỂ)
       # ───────────────────────────────────────────────
-      - name: 🚀 Cài đặt lại & Mở StarDesk (Sau khi mọi thứ đã cài xong và máy đã mở)
+      - name: 🚀 Cài đặt lại & Mở StarDesk (Fix triệt để treo splash: tscon → dọn lock → cài có điều kiện → health-check 3 lần)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
           $user          = "$env:RDP_USER";
-          $installerPath = 'C:\Users\runneradmin\Downloads\StarDesk_1.5.3.exe';
           $appDir        = 'C:\Program Files\StarDesk';
           $appExe        = 'C:\Program Files\StarDesk\StarDesk.exe';
+          $hcScript      = "$env:SHARED_OS_DIR\sd-health.ps1";
+          $hcOut         = "$env:SHARED_OS_DIR\sd-health.txt";
 
           Write-Host "";
-          Write-Host "🚀 ĐANG CÀI ĐẶT LẠI & KHỞI CHẠY STARDESK (GIỮ NGUYÊN DỮ LIỆU ĐÃ LƯU)..." -ForegroundColor Yellow;
+          Write-Host "🚀 KIỂM TRA & MỞ STARDESK (GIỮ NGUYÊN DỮ LIỆU ĐÃ LƯU)..." -ForegroundColor Yellow;
 
-          if (-not (Test-Path "$installerPath")) {
-              $altInstaller = [System.IO.Path]::Combine("$env:PROFILE_PATH", 'Downloads', 'StarDesk_1.5.2.exe');
-              if (Test-Path "$altInstaller") {
-                  $installerPath = "$altInstaller";
-              }
-          }
-
-          if (Test-Path "$installerPath") {
-              Write-Host "│ 📦 Tìm thấy bộ cài: $installerPath. Đang tiến hành cài đặt lại..." -ForegroundColor Cyan;
-
-              Get-Service -Name '*StarDesk*' -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue;
-              Get-Process -Name 'StarDesk*' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue;
-              Start-Sleep -Seconds 2;
-
-              $sdInstallJob = Start-Job -ScriptBlock {
-                  param($exe)
-                  Start-Process -FilePath "$exe" -ArgumentList '/S' -Wait;
-              } -ArgumentList "$installerPath";
-
-              $doneInstall = Wait-Job -Job ($sdInstallJob) -Timeout 60;
-              if (-not ($doneInstall)) {
-                  Write-Host "│ ⚠️  Bộ cài chạy quá 60s, tự động đóng tiến trình cài đặt để tiếp tục..." -ForegroundColor Yellow;
-                  Stop-Job -Job ($sdInstallJob) -ErrorAction SilentlyContinue;
-                  Get-Process -Name 'StarDesk_1.5.2*' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue;
-              }
-              Remove-Job -Job ($sdInstallJob) -Force -ErrorAction SilentlyContinue;
-
-              if ((-not (Test-Path "$appExe")) -and (-not (Get-Service -Name '*StarDesk*' -ErrorAction SilentlyContinue))) {
-                  Write-Host "│ 🔄 Chạy trực tiếp bộ cài $installerPath..." -ForegroundColor Cyan;
-                  $proc = Start-Process -FilePath "$installerPath" -PassThru -ErrorAction SilentlyContinue;
-                  $waited = 0;
-                  while (($waited -lt 45) -and (-not (Test-Path "$appExe"))) {
-                      Start-Sleep -Seconds 2;
-                      $waited += 2;
+          # ── 1. Nếu session của user đang Disc → tscon về console (tránh treo vì chạy trong session disconnected)
+          try {
+              @(quser 2>$null) | ForEach-Object {
+                  $lineStr = "$_";
+                  if (("$lineStr" -match "^\s*>?$([regex]::Escape("$user"))\s+") -and ("$lineStr" -match "\s+Disc\s+")) {
+                      $parts  = (($lineStr -replace '^>', ' ').Trim()) -split '\s+';
+                      $sidNum = $parts[1..(($parts.Count) - 1)] | Where-Object { $_ -match '^\d+$' } | Select-Object -First 1;
+                      if ($sidNum) {
+                          & tscon "$sidNum" /dest:console *> $null;
+                          Write-Host "│ 🖥️ Đã đưa session $sidNum về console trước khi mở StarDesk" -ForegroundColor Cyan;
+                          Start-Sleep -Seconds 3;
+                      }
                   }
+              };
+          } catch {}
+
+          # ── 2. Kill sạch StarDesk cũ (taskkill TRƯỚC để diệt cả process con) + dọn lock/cache
+          & taskkill.exe /F /IM 'StarDesk*' /T *> $null;
+          Get-Service -Name '*StarDesk*' -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue;
+          Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'StarDesk*' } | Stop-Process -Force -ErrorAction SilentlyContinue;
+          Start-Sleep -Seconds 3;
+
+          $profPath = "$env:PROFILE_PATH";
+          @(
+              "$profPath\AppData\Local\StarDesk\lockfile",
+              "$profPath\AppData\Local\StarDesk\SingletonLock",
+              "$profPath\AppData\Local\StarDesk\SingletonCookie",
+              "$profPath\AppData\Local\StarDesk\SingletonSocket",
+              "$profPath\AppData\Local\StarDesk\Cache",
+              "$profPath\AppData\Local\StarDesk\GPUCache",
+              "$profPath\AppData\Local\StarDesk\Code Cache",
+              "$profPath\AppData\Local\StarDesk\DawnCache",
+              "$profPath\AppData\Local\StarDesk\ShaderCache",
+              "$profPath\AppData\Local\StarDesk\Crashpad",
+              "$profPath\AppData\Roaming\StarDesk\lockfile",
+              "$profPath\AppData\Roaming\StarDesk\SingletonLock",
+              "$profPath\AppData\Roaming\StarDesk\SingletonCookie",
+              "$profPath\AppData\Roaming\StarDesk\SingletonSocket"
+          ) | ForEach-Object {
+              if (Test-Path "$_") {
+                  Remove-Item -Path "$_" -Recurse -Force -ErrorAction SilentlyContinue;
+              }
+          };
+          Write-Host "│ 🧹 Đã dọn lock/cache StarDesk tồn dư từ bản restore" -ForegroundColor Green;
+
+          # ── 3. Chỉ cài installer khi appExe CHƯA có; quét nhiều version fallback
+          if (-not (Test-Path "$appExe")) {
+              $candidates = @(
+                  'C:\Users\runneradmin\Downloads\StarDesk_1.5.4.exe',
+                  [System.IO.Path]::Combine("$profPath", 'Downloads', 'StarDesk_1.5.4.exe'),
+                  [System.IO.Path]::Combine("$profPath", 'Downloads', 'StarDesk_1.5.3.exe'),
+                  'C:\Users\runneradmin\Downloads\StarDesk_1.5.3.exe',
+                  'C:\Users\runneradmin\Downloads\StarDesk_1.5.2.exe'
+              ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+              if ($candidates) {
+                  Write-Host "│ 📦 Chưa có appExe — chạy cài đặt silent: $candidates" -ForegroundColor Cyan;
+                  $sdInstallJob = Start-Job -ScriptBlock {
+                      param($exe)
+                      Start-Process -FilePath "$exe" -ArgumentList '/S' -Wait;
+                  } -ArgumentList "$candidates";
+                  $doneInstall = Wait-Job -Job ($sdInstallJob) -Timeout 120;
+                  if (-not ($doneInstall)) {
+                      Write-Host "│ ⚠️  Installer chờ quá 120s — kill đúng cách và tiếp tục" -ForegroundColor Yellow;
+                      Stop-Job -Job ($sdInstallJob) -ErrorAction SilentlyContinue;
+                      & taskkill.exe /F /IM 'StarDesk*' /T *> $null;
+                      Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'StarDesk*' } | Stop-Process -Force -ErrorAction SilentlyContinue;
+                  }
+                  Remove-Job -Job ($sdInstallJob) -Force -ErrorAction SilentlyContinue;
                   Start-Sleep -Seconds 3;
-                  if (($proc) -and (-not ($proc.HasExited))) {
-                      Stop-Process -Id ($proc.Id) -Force -ErrorAction SilentlyContinue;
-                  }
+              } else {
+                  Write-Host "│ ⚠️  Không tìm thấy installer StarDesk (1.5.4/1.5.3/1.5.2)" -ForegroundColor Yellow;
               }
-              Write-Host "│ ✅ Đã hoàn tất chạy bộ cài đặt StarDesk_1.5.2.exe" -ForegroundColor Green;
           } else {
-              Write-Host "│ ⚠️  Không tìm thấy file cài đặt tại $installerPath (sẽ thử mở trực tiếp nếu đã có sẵn)" -ForegroundColor Yellow;
+              Write-Host "│ ⚡ Đã có sẵn $appExe (từ restore) — BỎ QUA cài đặt, chỉ mở app." -ForegroundColor Green;
           }
 
+          # Bật service nếu có
           Get-Service -Name '*StarDesk*' -ErrorAction SilentlyContinue | ForEach-Object {
               Set-Service -Name ($_.Name) -StartupType Automatic -ErrorAction SilentlyContinue;
               Start-Service -Name ($_.Name) -ErrorAction SilentlyContinue;
-              Write-Host "│ ✅ Đã bật dịch vụ $($_.Name)" -ForegroundColor Green;
           };
 
+          # ── 4. Script health-check: kiểm tra MainWindowTitle + Responding (chống báo TREO oan)
+          $hcContent = @"
+`$proc = Get-Process StarDesk* -ErrorAction SilentlyContinue | Where-Object { `$_.MainWindowTitle -ne '' -and `$_.Responding } | Select-Object -First 1
+if (`$proc) { 'OK' | Out-File -FilePath '$hcOut' -Encoding ASCII -Force }
+else {
+    `$alive = Get-Process StarDesk* -ErrorAction SilentlyContinue | Where-Object { `$_.Responding } | Select-Object -First 1
+    if (`$alive) { 'SPLASH' | Out-File -FilePath '$hcOut' -Encoding ASCII -Force }
+    else { 'TREO' | Out-File -FilePath '$hcOut' -Encoding ASCII -Force }
+}
+"@;
+          Set-Content -Path "$hcScript" -Value "$hcContent" -Encoding UTF8;
+          & schtasks.exe /Create /TN "AISTV-SD-Health" /TR "pwsh.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$hcScript`"" /SC ONCE /ST 00:00 /RU "$user" /RL HIGHEST /IT /F *> $null;
+
+          function Test-SDHealth {
+              param([int]$TimeoutSec = 25)
+              if (Test-Path "$hcOut") { Remove-Item "$hcOut" -Force -ErrorAction SilentlyContinue; }
+              & schtasks.exe /Run /TN "AISTV-SD-Health" *> $null;
+              $elapsed = 0;
+              while (($elapsed -lt $TimeoutSec) -and (-not (Test-Path "$hcOut"))) {
+                  Start-Sleep -Seconds 2;
+                  $elapsed += 2;
+              }
+              if (Test-Path "$hcOut") {
+                  $result = (Get-Content "$hcOut" -Raw -ErrorAction SilentlyContinue).Trim();
+                  Remove-Item "$hcOut" -Force -ErrorAction SilentlyContinue;
+                  return $result;
+              }
+              return 'TREO';
+          }
+
+          # ── 5. Mở StarDesk + health-check, tối đa 3 lần thử với thời gian chờ tăng dần
           if (Test-Path "$appExe") {
-              try {
+              $launched = $false;
+              $waits = @(30, 45, 60);
+              for ($attempt = 1; $attempt -le 3; $attempt++) {
+                  & taskkill.exe /F /IM 'StarDesk*' /T *> $null;
+                  Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'StarDesk*' } | Stop-Process -Force -ErrorAction SilentlyContinue;
+                  Start-Sleep -Seconds 3;
+
+                  Write-Host "│ 🚀 Mở StarDesk (lần thử $attempt)..." -ForegroundColor Cyan;
                   & schtasks.exe /Create /TN "AISTV-Launch-StarDesk" /TR "`"$appExe`"" /SC ONCE /ST 00:00 /RU "$user" /RL HIGHEST /IT /F *> $null;
                   & schtasks.exe /Run /TN "AISTV-Launch-StarDesk" *> $null;
                   Start-Sleep -Seconds 3;
-              } catch {}
 
-              if (-not (Get-Process -Name 'StarDesk*' -ErrorAction SilentlyContinue)) {
-                  Start-Process -FilePath "$appExe" -WorkingDirectory "$appDir";
-                  Start-Sleep -Seconds 2;
+                  # Fallback nếu schtasks không bật được process
+                  if (-not (Get-Process -Name 'StarDesk*' -ErrorAction SilentlyContinue)) {
+                      Start-Process -FilePath "$appExe" -WorkingDirectory "$appDir" -ErrorAction SilentlyContinue;
+                      Start-Sleep -Seconds 2;
+                  }
+
+                  $waitSec = $waits[$attempt - 1];
+                  Write-Host "│ ⏳ Đợi ${waitSec}s rồi health-check..." -ForegroundColor Cyan;
+                  Start-Sleep -Seconds $waitSec;
+
+                  $hc = Test-SDHealth -TimeoutSec 25;
+                  if ($hc -eq 'OK') {
+                      $launched = $true;
+                      Write-Host "│ ✅ StarDesk đã lên UI đầy đủ (lần thử $attempt)" -ForegroundColor Green;
+                      break;
+                  } elseif ($hc -eq 'SPLASH') {
+                      Write-Host "│ ⚠️  StarDesk còn splash nhưng process còn sống — đợi thêm 20s..." -ForegroundColor Yellow;
+                      Start-Sleep -Seconds 20;
+                      if ((Test-SDHealth -TimeoutSec 20) -eq 'OK') {
+                          $launched = $true;
+                          Write-Host "│ ✅ StarDesk đã lên UI sau khi đợi thêm" -ForegroundColor Green;
+                          break;
+                      }
+                      Write-Host "│ ⚠️  Vẫn treo splash (lần thử $attempt) — retry" -ForegroundColor Yellow;
+                  } else {
+                      Write-Host "│ ⚠️  StarDesk không phản hồi (lần thử $attempt) — retry" -ForegroundColor Yellow;
+                  }
+                  & taskkill.exe /F /IM 'StarDesk*' /T *> $null;
+                  Start-Sleep -Seconds 3;
               }
-              "STARDESK_READY=1" >> "$env:GITHUB_ENV";
-              Write-Host "│ ✅ Đã mở ứng dụng StarDesk thành công: $appExe" -ForegroundColor Green;
+
+              # Dọn task health-check
+              & schtasks.exe /Delete /TN "AISTV-SD-Health" /F *> $null;
+              Remove-Item "$hcScript" -Force -ErrorAction SilentlyContinue;
+
+              if ($launched) {
+                  "STARDESK_READY=1" >> "$env:GITHUB_ENV";
+                  Write-Host "│ ✅ StarDesk sẵn sàng: $appExe" -ForegroundColor Green;
+              } else {
+                  "STARDESK_FAILED=1" >> "$env:GITHUB_ENV";
+                  Write-Host "│ ❌ StarDesk vẫn treo sau 3 lần thử — keepalive sẽ tự phục hồi có kiểm soát." -ForegroundColor Red;
+              }
           } else {
-              Write-Host "│ ❌ Không tìm thấy $appExe sau khi chạy cài đặt!" -ForegroundColor Red;
+              Write-Host "│ ❌ Không tìm thấy $appExe sau khi cài đặt!" -ForegroundColor Red;
           }
           $global:LASTEXITCODE = 0;
           exit 0;
@@ -1654,16 +1760,6 @@ jobs:
                   if ("$cmd" -eq 'SAVE_NOW') {
                       Write-Host "💾 [WEB-PANEL] Nhận lệnh LƯU NGAY từ Web Quản Lý..." -ForegroundColor Cyan;
                       & "$saveScript" -Reason 'manual-web-save';
-                      if (Test-Path "$sdExe") {
-                          Get-Service -Name '*StarDesk*' -ErrorAction SilentlyContinue | Start-Service -ErrorAction SilentlyContinue;
-                          if (-not (Get-Process -Name 'StarDesk*' -ErrorAction SilentlyContinue)) {
-                              & schtasks.exe /Run /TN "AISTV-Launch-StarDesk" *> $null;
-                              Start-Sleep -Seconds 2;
-                              if (-not (Get-Process -Name 'StarDesk*' -ErrorAction SilentlyContinue)) {
-                                  Start-Process -FilePath "$sdExe" -WorkingDirectory 'C:\Program Files\StarDesk';
-                              }
-                          }
-                      }
                       $global:LASTEXITCODE = 0;
                   } elseif ("$cmd" -eq 'RESTART_SESSION') {
                       Write-Host "🔁 [WEB-PANEL] Nhận lệnh LƯU & KHỞI ĐỘNG LẠI PHIÊN MỚI từ Web Quản Lý!" -ForegroundColor Yellow;
@@ -1729,20 +1825,50 @@ jobs:
                   }
               }
 
+              # ── Auto-restart StarDesk có kiểm soát: tscon → dọn lock → task mới → fallback
               if ((Test-Path "$sdExe") -and (-not (Get-Process -Name 'StarDesk*' -ErrorAction SilentlyContinue))) {
+                  try {
+                      @(quser 2>$null) | ForEach-Object {
+                          $lineStr = "$_";
+                          if (("$lineStr" -match "^\s*>?$([regex]::Escape("$u"))\s+") -and ("$lineStr" -match "\s+Disc\s+")) {
+                              $parts  = (($lineStr -replace '^>', ' ').Trim()) -split '\s+';
+                              $sidNum = $parts[1..(($parts.Count) - 1)] | Where-Object { $_ -match '^\d+$' } | Select-Object -First 1;
+                              if ($sidNum) {
+                                  & tscon "$sidNum" /dest:console *> $null;
+                                  Write-Host "🖥️ Keepalive: trả session $sidNum về console trước khi mở lại StarDesk" -ForegroundColor Cyan;
+                                  Start-Sleep -Seconds 3;
+                              }
+                          }
+                      };
+                  } catch {}
+
+                  @(
+                      "$env:PROFILE_PATH\AppData\Local\StarDesk\lockfile",
+                      "$env:PROFILE_PATH\AppData\Local\StarDesk\SingletonLock",
+                      "$env:PROFILE_PATH\AppData\Local\StarDesk\SingletonCookie",
+                      "$env:PROFILE_PATH\AppData\Local\StarDesk\SingletonSocket"
+                  ) | ForEach-Object {
+                      if (Test-Path "$_") { Remove-Item "$_" -Recurse -Force -ErrorAction SilentlyContinue; }
+                  };
+
+                  & taskkill.exe /F /IM 'StarDesk*' /T *> $null;
+                  Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'StarDesk*' } | Stop-Process -Force -ErrorAction SilentlyContinue;
                   Get-Service -Name '*StarDesk*' -ErrorAction SilentlyContinue | Start-Service -ErrorAction SilentlyContinue;
+
+                  & schtasks.exe /Create /TN "AISTV-Launch-StarDesk" /TR "`"$sdExe`"" /SC ONCE /ST 00:00 /RU "$u" /RL HIGHEST /IT /F *> $null;
                   & schtasks.exe /Run /TN "AISTV-Launch-StarDesk" *> $null;
-                  Start-Sleep -Seconds 1;
+                  Start-Sleep -Seconds 3;
                   if (-not (Get-Process -Name 'StarDesk*' -ErrorAction SilentlyContinue)) {
                       Start-Process -FilePath "$sdExe" -WorkingDirectory 'C:\Program Files\StarDesk' -ErrorAction SilentlyContinue;
                   }
+                  Write-Host "🚀 Keepalive: đã gọi mở lại StarDesk (có tscon + dọn lock + task mới)" -ForegroundColor Green;
               }
 
               if ((-not ($warned)) -and (($remain) -le 300)) {
                   try {
                       msg * /TIME:290 "Phien RDP/Sunshine/StarDesk [$($env:MACHINE_ID)] sap het gio (5 phut). He thong se tu dong dong goi toan bo o dia $($env:MOUNT_LETTER): luu len GitHub!";
                   } catch {}
-                  $warned =$true;
+                  $warned = $true;
               }
 
               Start-Sleep -Seconds 2;
@@ -1765,8 +1891,9 @@ jobs:
           Stop-Process -Name 'sunshine' -Force -ErrorAction SilentlyContinue;
 
           & schtasks.exe /Delete /TN "AISTV-Launch-StarDesk" /F *> $null;
+          & schtasks.exe /Delete /TN "AISTV-SD-Health" /F *> $null;
           Get-Process -Name 'StarDesk*' -ErrorAction SilentlyContinue | ForEach-Object {
-              $null =$_.CloseMainWindow();
+              $null = $_.CloseMainWindow();
           };
           Start-Sleep -Seconds 2;
           Get-Service -Name '*StarDesk*' -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue;
